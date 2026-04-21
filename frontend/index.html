@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartRoute AI</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/index.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>SmartRoute <span class="highlight">AI</span></h1>
+                <p>Global Intelligent Pathfinding</p>
+            </div>
+            
+            <form id="route-form">
+                <div class="form-group" style="position: relative;">
+                    <label for="source">Source Location</label>
+                    <input type="text" id="source" placeholder="e.g. Times Square, NY" autocomplete="off" required />
+                    <ul id="source-autocomplete" class="autocomplete-list hidden"></ul>
+                </div>
+                
+                <div class="form-group" style="position: relative;">
+                    <label for="destination">Destination Location</label>
+                    <input type="text" id="destination" placeholder="e.g. Central Park, NY" autocomplete="off" required />
+                    <ul id="dest-autocomplete" class="autocomplete-list hidden"></ul>
+                </div>
+
+                <div class="form-group">
+                    <label for="traffic_level">Simulated Traffic Level (<span id="traffic_val">0.5</span>)</label>
+                    <input type="range" id="traffic_level" min="0" max="1" step="0.1" value="0.5" />
+                </div>
+
+                <button type="submit" id="calculate-btn">Find Optimal Path</button>
+            </form>
+
+            <div id="loading" class="hidden">
+                <div class="spinner"></div>
+                <p>Analyzing global routes...</p>
+            </div>
+
+            <div id="results" class="hidden">
+                <h3>Route Metrics</h3>
+                <div class="metric">
+                    <span class="label">Total Distance</span>
+                    <span class="value" id="dist-val">0 km</span>
+                </div>
+                <div class="metric">
+                    <span class="label">Est. Time</span>
+                    <span class="value" id="time-val">0 min</span>
+                </div>
+                <div class="metric">
+                    <span class="label">Algorithm</span>
+                    <span class="value" id="algo-val">-</span>
+                </div>
+                <div class="metric">
+                    <span class="label">Petrol Pumps Found</span>
+                    <span class="value" id="pois-val">0</span>
+                </div>
+            </div>
+            
+            <div id="error-msg" class="hidden"></div>
+        </aside>
+
+        <!-- Main Map Area -->
+        <main class="map-container">
+            <div id="map"></div>
+        </main>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

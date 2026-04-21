@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+osmnx
+networkx
+scikit-learn
+geopy
+pydantic
+requests
