@@ -126,7 +126,6 @@ form.addEventListener('submit', async (e) => {
         // Update Results UI
         document.getElementById('dist-val').textContent = distText;
         document.getElementById('time-val').textContent = timeText;
-        document.getElementById('algo-val').textContent = data.metrics.algorithm;
         document.getElementById('pois-val').textContent = data.pois ? data.pois.length : 0;
 
         // Display AI Traffic Analysis
