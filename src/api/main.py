@@ -167,10 +167,13 @@ def calculate_route(req: RouteRequest):
     
     if distance_m / 1000 > max_distance_km:
         logging.info(f"Distance > 100km ({round(distance_m/1000, 1)}km). Using OSRM API.")
+        # Auto-detect traffic for long-distance routes too
+        traffic_info = predict_traffic_level(req.source, req.destination)
+
         # Call public OSRM API
         osrm_url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
         try:
-            resp = requests.get(osrm_url)
+            resp = requests.get(osrm_url, timeout=15)
             resp.raise_for_status()
             data = resp.json()
             
@@ -183,9 +186,32 @@ def calculate_route(req: RouteRequest):
             # OSRM returns [lon, lat], we need {"lat": lat, "lon": lon}
             path_coords = [{"lat": pt[1], "lon": pt[0]} for pt in coords]
             
-            # Time in OSRM is seconds, distance is meters
-            time_minutes = round(route_data["duration"] / 60, 2)
+            # Apply traffic delay to OSRM time as well
+            base_time = route_data["duration"] / 60
+            traffic_multiplier = 1 + (traffic_info["level"] * 0.4)
+            time_minutes = round(base_time * traffic_multiplier, 2)
             dist_km = round(route_data["distance"] / 1000, 2)
+
+            # Fetch petrol pumps along midpoint of long route
+            pumps = []
+            if req.fetch_pois:
+                try:
+                    mid_lat = (lat1 + lat2) / 2
+                    mid_lon = (lon1 + lon2) / 2
+                    pumps = fetch_nearest_petrol_pumps(lat1, lon1, mid_lat, mid_lon)
+                    pumps += fetch_nearest_petrol_pumps(mid_lat, mid_lon, lat2, lon2)
+                    # Deduplicate by name
+                    seen = set()
+                    unique_pumps = []
+                    for p in pumps:
+                        key = (round(p.get('lat',0),4), round(p.get('lon',0),4))
+                        if key not in seen:
+                            seen.add(key)
+                            unique_pumps.append(p)
+                    pumps = unique_pumps[:10]  # Max 10 pumps
+                except Exception as poi_err:
+                    logging.warning(f"POI fetch failed for long route: {poi_err}")
+                    pumps = []
             
             return {
                 "source_coords": {"lat": lat1, "lon": lon1},
@@ -194,9 +220,10 @@ def calculate_route(req: RouteRequest):
                 "metrics": {
                     "time_minutes": time_minutes,
                     "distance_km": dist_km,
-                    "algorithm": "OSRM (Fast routing)"
+                    "algorithm": "OSRM (Fast Global Routing)"
                 },
-                "pois": [] # Skip POIs for long distances to save load
+                "traffic": traffic_info,
+                "pois": pumps
             }
         except Exception as e:
             logging.error(f"OSRM Error: {e}")
