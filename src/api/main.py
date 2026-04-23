@@ -1,6 +1,8 @@
 import logging
 import os
 import requests
+from datetime import datetime
+import pytz
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -22,10 +24,91 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Major metro cities that always have higher baseline traffic
+MAJOR_METROS = [
+    'mumbai', 'delhi', 'bangalore', 'kolkata', 'chennai', 'hyderabad',
+    'pune', 'ahmedabad', 'london', 'new york', 'paris', 'tokyo', 'beijing',
+    'shanghai', 'los angeles', 'chicago', 'dubai', 'singapore', 'bangkok',
+    'jakarta', 'mexico city', 'cairo', 'lagos', 'karachi', 'dhaka',
+    'silchar', 'guwahati', 'bhubaneswar', 'bhopal', 'jaipur', 'lucknow'
+]
+
+def predict_traffic_level(source: str, destination: str) -> dict:
+    """
+    Intelligently predict traffic level based on:
+    1. Current time of day (rush hours = high traffic)
+    2. Day of week (weekday vs weekend)
+    3. City type (major metro vs rural)
+    """
+    # Get current Indian time (IST) as the default timezone
+    try:
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+    except Exception:
+        now = datetime.now()
+
+    hour = now.hour
+    weekday = now.weekday()  # 0=Monday, 6=Sunday
+    is_weekend = weekday >= 5
+
+    # --- Time-based Traffic Score ---
+    time_score = 0.2  # Default: light traffic
+    traffic_reason = "Light traffic"
+
+    if not is_weekend:
+        if 7 <= hour <= 10:  # Morning Rush Hour
+            time_score = 0.85
+            traffic_reason = "Morning rush hour"
+        elif 17 <= hour <= 20:  # Evening Rush Hour
+            time_score = 0.9
+            traffic_reason = "Evening rush hour"
+        elif 11 <= hour <= 16:  # Business Hours
+            time_score = 0.5
+            traffic_reason = "Moderate business hour traffic"
+        elif 21 <= hour <= 23:  # Late Evening
+            time_score = 0.3
+            traffic_reason = "Light evening traffic"
+        else:  # Midnight / Early Morning
+            time_score = 0.1
+            traffic_reason = "Very light late night traffic"
+    else:
+        if 10 <= hour <= 20:  # Weekend day time
+            time_score = 0.6
+            traffic_reason = "Weekend outing traffic"
+        else:
+            time_score = 0.15
+            traffic_reason = "Light weekend traffic"
+
+    # --- Location-based Urban Density Boost ---
+    combined_locations = (source + " " + destination).lower()
+    is_metro = any(city in combined_locations for city in MAJOR_METROS)
+    location_label = "Urban" if is_metro else "Rural/Suburban"
+
+    if is_metro:
+        # Major cities get a +20% traffic boost
+        time_score = min(1.0, time_score + 0.2)
+        location_label = "Major Metro City"
+
+    # --- Final Status Label ---
+    if time_score >= 0.8:
+        status = "🔴 Heavy Traffic"
+    elif time_score >= 0.5:
+        status = "🟡 Moderate Traffic"
+    elif time_score >= 0.25:
+        status = "🟢 Light Traffic"
+    else:
+        status = "🟢 Very Light Traffic"
+
+    return {
+        "level": round(time_score, 2),
+        "status": status,
+        "reason": traffic_reason,
+        "area_type": location_label
+    }
+
 class RouteRequest(BaseModel):
     source: str
     destination: str
-    traffic_level: float = 0.5
     fetch_pois: bool = True
 
 def resolve_location(loc_str: str):
@@ -120,17 +203,21 @@ def calculate_route(req: RouteRequest):
             raise HTTPException(status_code=500, detail=f"Long-distance routing failed: {e}")
     
     try:
-        # 2. Fetch Map Graph
+        # 2. Auto-detect traffic level based on time & location
+        traffic_info = predict_traffic_level(req.source, req.destination)
+        logging.info(f"AI Traffic Detection: {traffic_info}")
+
+        # 3. Fetch Map Graph
         G = fetch_map_data(lat1, lon1, lat2, lon2)
         
-        # 3. Apply Traffic Model
-        G = apply_traffic_model(G, simulation_level=req.traffic_level)
+        # 4. Apply Traffic Model using AI-detected level
+        G = apply_traffic_model(G, simulation_level=traffic_info["level"])
         
-        # 4. Find nearest nodes
+        # 5. Find nearest nodes
         source_node = get_nearest_node(G, lat1, lon1)
         dest_node = get_nearest_node(G, lat2, lon2)
         
-        # 5. Pathfinding (Strictly A* for optimal performance)
+        # 6. Pathfinding (Strictly A* for optimal performance)
         result = find_optimal_path(G, source_node, dest_node)
         
         if not result:
@@ -150,6 +237,7 @@ def calculate_route(req: RouteRequest):
                 "distance_km": result["total_distance_km"],
                 "algorithm": result["algorithm"]
             },
+            "traffic": traffic_info,
             "pois": pumps
         }
         

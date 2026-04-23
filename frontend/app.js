@@ -28,16 +28,9 @@ let currentMarkers = [];
 const form = document.getElementById('route-form');
 const sourceInput = document.getElementById('source');
 const destInput = document.getElementById('destination');
-const trafficRange = document.getElementById('traffic_level');
-const trafficVal = document.getElementById('traffic_val');
 const loadingDiv = document.getElementById('loading');
 const resultsDiv = document.getElementById('results');
 const errorMsg = document.getElementById('error-msg');
-
-// Traffic slider update
-trafficRange.addEventListener('input', (e) => {
-    trafficVal.textContent = e.target.value;
-});
 
 const clearMap = () => {
     if (currentRouteLayer) {
@@ -65,7 +58,6 @@ form.addEventListener('submit', async (e) => {
     const payload = {
         source: sourceInput.dataset.coords || sourceInput.value,
         destination: destInput.dataset.coords || destInput.value,
-        traffic_level: parseFloat(trafficRange.value),
         fetch_pois: true
     };
 
@@ -136,6 +128,13 @@ form.addEventListener('submit', async (e) => {
         document.getElementById('time-val').textContent = timeText;
         document.getElementById('algo-val').textContent = data.metrics.algorithm;
         document.getElementById('pois-val').textContent = data.pois ? data.pois.length : 0;
+
+        // Display AI Traffic Analysis
+        if (data.traffic) {
+            document.getElementById('traffic-status-val').textContent = data.traffic.status;
+            document.getElementById('traffic-reason-val').textContent = `📍 ${data.traffic.reason}`;
+            document.getElementById('traffic-area-val').textContent = `🏙️ ${data.traffic.area_type}`;
+        }
         
         resultsDiv.classList.remove('hidden');
 

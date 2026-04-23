@@ -6,3 +6,4 @@ scikit-learn
 geopy
 pydantic
 requests
+pytz

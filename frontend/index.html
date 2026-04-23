@@ -32,10 +32,6 @@
                     <ul id="dest-autocomplete" class="autocomplete-list hidden"></ul>
                 </div>
 
-                <div class="form-group">
-                    <label for="traffic_level">Simulated Traffic Level (<span id="traffic_val">0.5</span>)</label>
-                    <input type="range" id="traffic_level" min="0" max="1" step="0.1" value="0.5" />
-                </div>
 
                 <button type="submit" id="calculate-btn">Find Optimal Path</button>
             </form>
@@ -62,6 +58,12 @@
                 <div class="metric">
                     <span class="label">Petrol Pumps Found</span>
                     <span class="value" id="pois-val">0</span>
+                </div>
+                <div class="traffic-status-card" id="traffic-card">
+                    <div class="traffic-status-title">🤖 AI Traffic Analysis</div>
+                    <div class="traffic-status-value" id="traffic-status-val">-</div>
+                    <div class="traffic-status-detail" id="traffic-reason-val"></div>
+                    <div class="traffic-status-detail" id="traffic-area-val"></div>
                 </div>
             </div>
             

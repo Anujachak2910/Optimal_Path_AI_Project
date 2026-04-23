@@ -255,3 +255,35 @@ button:active {
 .autocomplete-list li:hover {
     background: rgba(255, 255, 255, 0.05);
 }
+
+/* AI Traffic Status Card */
+.traffic-status-card {
+    margin-top: 1.25rem;
+    padding: 1rem 1.25rem;
+    border-radius: 10px;
+    background: rgba(16, 185, 129, 0.07);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    animation: slideUp 0.4s ease-out forwards;
+}
+
+.traffic-status-title {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.5rem;
+}
+
+.traffic-status-value {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--text-main);
+    margin-bottom: 0.4rem;
+}
+
+.traffic-status-detail {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin-top: 0.2rem;
+}
