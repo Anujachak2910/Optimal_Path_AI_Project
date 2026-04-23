@@ -47,8 +47,8 @@ def autocomplete(q: str):
         return []
     try:
         url = f"https://nominatim.openstreetmap.org/search?q={q}&format=json&limit=5"
-        headers = {'User-Agent': 'smartroute_ai_optimal_path'}
-        resp = requests.get(url, headers=headers)
+        headers = {'User-Agent': 'smartroute_ai_optimal_path_anu_unique_2026'}
+        resp = requests.get(url, headers=headers, timeout=5)
         resp.raise_for_status()
         data = resp.json()
         

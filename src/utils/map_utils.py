@@ -9,8 +9,8 @@ import threading
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize geocoder
-geolocator = Nominatim(user_agent="smartroute_ai_optimal_path")
+# Initialize geocoder with a very unique user agent to avoid shared IP rate limits
+geolocator = Nominatim(user_agent="smartroute_ai_optimal_path_anu_unique_2026")
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -21,7 +21,8 @@ download_lock = threading.Lock()
 def geocode_address(address: str):
     """Convert an address string into (lat, lon) coordinates."""
     try:
-        location = geolocator.geocode(address)
+        # Increased timeout to 10 seconds for better resilience on shared hosting
+        location = geolocator.geocode(address, timeout=10)
         if location:
             return location.latitude, location.longitude
         return None
