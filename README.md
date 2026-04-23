@@ -1,3 +1,12 @@
+---
+title: SmartRoute AI
+emoji: 🚀
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+
 # SmartRoute AI (Optimal Path Finder)
 
 SmartRoute AI is an intelligent, production-grade geographic routing application. It dynamically calculates the absolute mathematically optimal path between any two locations across the globe, minimizing travel time while accounting for simulated real-world traffic conditions.
