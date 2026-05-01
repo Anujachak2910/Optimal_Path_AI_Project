@@ -70,6 +70,12 @@ form.addEventListener('submit', async (e) => {
             body: JSON.stringify(payload)
         });
 
+        // Prevent crash if Hugging Face returns a 504 Timeout or 500 HTML error page
+        const contentType = response.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+            throw new Error("The cloud server took too long and timed out. Please try a shorter distance.");
+        }
+
         const data = await response.json();
 
         if (!response.ok) {

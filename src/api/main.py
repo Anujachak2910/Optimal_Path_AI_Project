@@ -163,7 +163,7 @@ def calculate_route(req: RouteRequest):
     
     # Calculate straight-line distance to prevent downloading massive graphs
     distance_m = haversine(lat1, lon1, lat2, lon2)
-    max_distance_km = 100 # Maximum allowed distance for local processing
+    max_distance_km = 25 # Reduced to 25km to prevent Hugging Face cloud timeouts
     
     if distance_m / 1000 > max_distance_km:
         logging.info(f"Distance > 100km ({round(distance_m/1000, 1)}km). Using OSRM API.")
