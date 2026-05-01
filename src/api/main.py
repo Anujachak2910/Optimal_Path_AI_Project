@@ -3,10 +3,10 @@ import os
 import requests
 from datetime import datetime
 import pytz
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from src.utils.map_utils import geocode_address, fetch_map_data, get_nearest_node, fetch_nearest_petrol_pumps
@@ -14,6 +14,16 @@ from src.utils.traffic_model import apply_traffic_model
 from src.algorithms.pathfinder import find_optimal_path, haversine
 
 app = FastAPI(title="SmartRoute AI API")
+
+# Global exception handler - ALWAYS returns JSON, never HTML
+# This prevents the "Unexpected token" error on the frontend
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logging.error(f"Unhandled exception: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Server error: {str(exc)[:200]}"}
+    )
 
 # Configure CORS for frontend
 app.add_middleware(
@@ -192,32 +202,8 @@ def calculate_route(req: RouteRequest):
             time_minutes = round(base_time * traffic_multiplier, 2)
             dist_km = round(route_data["distance"] / 1000, 2)
 
-            # Fetch petrol pumps along the route intelligently without massive downloads
+            # Skip POI fetching for long routes - too slow on cloud hosting
             pumps = []
-            if req.fetch_pois and len(path_coords) > 0:
-                try:
-                    # Sample up to 5 points evenly spaced along the route
-                    num_samples = min(5, len(path_coords))
-                    step = max(1, len(path_coords) // num_samples)
-                    sample_points = [path_coords[i] for i in range(0, len(path_coords), step)]
-                    if path_coords[-1] not in sample_points:
-                        sample_points.append(path_coords[-1])
-                        
-                    for pt in sample_points:
-                        pumps += fetch_nearest_petrol_pumps(pt['lat'], pt['lon'], pt['lat'], pt['lon'])
-                    
-                    # Deduplicate by name and location
-                    seen = set()
-                    unique_pumps = []
-                    for p in pumps:
-                        key = (round(p.get('lat',0),4), round(p.get('lon',0),4))
-                        if key not in seen:
-                            seen.add(key)
-                            unique_pumps.append(p)
-                    pumps = unique_pumps[:10]  # Max 10 pumps
-                except Exception as poi_err:
-                    logging.warning(f"POI fetch failed for long route: {poi_err}")
-                    pumps = []
             
             return {
                 "source_coords": {"lat": lat1, "lon": lon1},
