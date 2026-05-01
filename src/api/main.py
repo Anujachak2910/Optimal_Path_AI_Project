@@ -192,13 +192,19 @@ def calculate_route(req: RouteRequest):
             time_minutes = round(base_time * traffic_multiplier, 2)
             dist_km = round(route_data["distance"] / 1000, 2)
 
-            # Fetch petrol pumps locally near start and end only to prevent massive downloads
+            # Fetch petrol pumps along the route intelligently without massive downloads
             pumps = []
-            if req.fetch_pois:
+            if req.fetch_pois and len(path_coords) > 0:
                 try:
-                    # Instead of half the country, only search a ~2km radius around source and destination
-                    pumps = fetch_nearest_petrol_pumps(lat1, lon1, lat1, lon1)
-                    pumps += fetch_nearest_petrol_pumps(lat2, lon2, lat2, lon2)
+                    # Sample up to 5 points evenly spaced along the route
+                    num_samples = min(5, len(path_coords))
+                    step = max(1, len(path_coords) // num_samples)
+                    sample_points = [path_coords[i] for i in range(0, len(path_coords), step)]
+                    if path_coords[-1] not in sample_points:
+                        sample_points.append(path_coords[-1])
+                        
+                    for pt in sample_points:
+                        pumps += fetch_nearest_petrol_pumps(pt['lat'], pt['lon'], pt['lat'], pt['lon'])
                     
                     # Deduplicate by name and location
                     seen = set()
