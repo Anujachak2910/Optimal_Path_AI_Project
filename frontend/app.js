@@ -1,9 +1,30 @@
 // Initialize Map
-const map = L.map('map').setView([20.0, 0.0], 2); // Global default view
+const map = L.map('map', {
+    zoomControl: true,
+    tap: false  // Fix for iOS Safari touch issues
+}).setView([20.0, 0.0], 2);
+
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
-    attribution: '© OpenStreetMap contributors'
+    attribution: '© OpenStreetMap contributors',
+    crossOrigin: true
 }).addTo(map);
+
+// Fix for mobile black screen: tell Leaflet to recalculate its size
+// after the browser has finished painting the layout
+window.addEventListener('load', () => {
+    setTimeout(() => { map.invalidateSize(); }, 300);
+});
+
+// Fix for black screen when rotating the phone
+window.addEventListener('resize', () => {
+    setTimeout(() => { map.invalidateSize(); }, 300);
+});
+
+// Also fix orientation change specifically (mobile)
+window.addEventListener('orientationchange', () => {
+    setTimeout(() => { map.invalidateSize(); }, 500);
+});
 
 // Custom Icons
 const createIcon = (color) => {
