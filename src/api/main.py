@@ -97,7 +97,8 @@ def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
             except Exception as e:
                 logging.warning(f"Bbox query failed: {e}")
     else:
-        # Large route: 5 evenly spaced sequential point queries covering full highway
+        # Large route: ONE Overpass query with all 5 waypoints merged in a union
+        # This avoids rate limiting (429) from multiple requests
         waypoints = [
             (
                 lat1 + (lat2 - lat1) * i / 4,
@@ -105,11 +106,43 @@ def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
             )
             for i in range(5)  # 0%, 25%, 50%, 75%, 100%
         ]
-        per_point = max(6, max_results // 5)
-        for (lat, lon) in waypoints:
-            result = _overpass_point_query(lat, lon, radius_m=10000, limit=per_point)
-            pumps.extend(result)
-            logging.info(f"Point ({round(lat,2)},{round(lon,2)}) → {len(result)} pumps")
+        radius_m = 10000
+        per_point = max(5, max_results // 5)
+
+        # Build one big union query covering all waypoints
+        node_parts = "\n".join(
+            [f'node["amenity"="fuel"](around:{radius_m},{lat},{lon});' for lat, lon in waypoints]
+        )
+        way_parts = "\n".join(
+            [f'way["amenity"="fuel"](around:{radius_m},{lat},{lon});' for lat, lon in waypoints]
+        )
+        query = f"""
+        [out:json][timeout:30];
+        (
+          {node_parts}
+          {way_parts}
+        );
+        out center {max_results};
+        """
+        mirrors = [
+            "https://overpass-api.de/api/interpreter",
+            "https://overpass.kumi.systems/api/interpreter",
+        ]
+        for mirror in mirrors:
+            try:
+                resp = requests.post(mirror, data=query, timeout=35)
+                resp.raise_for_status()
+                elements = resp.json().get("elements", [])
+                for el in elements:
+                    if el["type"] == "node":
+                        pumps.append({"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
+                    elif "center" in el:
+                        pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
+                logging.info(f"Union query returned {len(pumps)} pumps for long route")
+                break
+            except Exception as e:
+                logging.warning(f"Union query failed on {mirror}: {e}")
+
 
     # Deduplicate
     seen = set()
