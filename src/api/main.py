@@ -24,16 +24,26 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": f"Server error: {str(exc)[:200]}"}
     )
 
-def fetch_pumps_overpass(lat: float, lon: float, radius_m: int = 5000) -> list:
+def fetch_pumps_overpass(sample_points: list, radius_m: int = 3000) -> list:
     """
-    Fast petrol pump fetcher using Overpass API.
-    Queries a radius around a single point — much faster than OSMnx bbox.
+    Fast petrol pump fetcher using a SINGLE Overpass API batch query.
+    Queries a radius around multiple points in one HTTP call.
     """
+    if not sample_points:
+        return []
+
+    # Build one big query covering all sample points
+    node_parts = "\n".join(
+        [f'node["amenity"="fuel"](around:{radius_m},{pt["lat"]},{pt["lon"]});' for pt in sample_points]
+    )
+    way_parts = "\n".join(
+        [f'way["amenity"="fuel"](around:{radius_m},{pt["lat"]},{pt["lon"]});' for pt in sample_points]
+    )
     query = f"""
-    [out:json][timeout:8];
+    [out:json][timeout:15];
     (
-      node["amenity"="fuel"](around:{radius_m},{lat},{lon});
-      way["amenity"="fuel"](around:{radius_m},{lat},{lon});
+      {node_parts}
+      {way_parts}
     );
     out center;
     """
@@ -41,7 +51,7 @@ def fetch_pumps_overpass(lat: float, lon: float, radius_m: int = 5000) -> list:
         resp = requests.post(
             "https://overpass-api.de/api/interpreter",
             data=query,
-            timeout=10
+            timeout=18
         )
         resp.raise_for_status()
         elements = resp.json().get("elements", [])
@@ -233,12 +243,23 @@ def calculate_route(req: RouteRequest):
             time_minutes = round(base_time * traffic_multiplier, 2)
             dist_km = round(route_data["distance"] / 1000, 2)
 
-            # Fetch petrol pumps via fast Overpass API (near source + destination)
+            # Fetch petrol pumps along the ENTIRE route using batch Overpass query
             pumps = []
-            if req.fetch_pois:
+            if req.fetch_pois and len(path_coords) > 0:
                 try:
-                    pumps = fetch_pumps_overpass(lat1, lon1, radius_m=5000)
-                    pumps += fetch_pumps_overpass(lat2, lon2, radius_m=5000)
+                    # Sample 8 points evenly along the full route
+                    num_samples = min(8, len(path_coords))
+                    step = max(1, len(path_coords) // num_samples)
+                    sample_points = [path_coords[i] for i in range(0, len(path_coords), step)]
+                    # Always include source and destination
+                    if path_coords[0] not in sample_points:
+                        sample_points.insert(0, path_coords[0])
+                    if path_coords[-1] not in sample_points:
+                        sample_points.append(path_coords[-1])
+
+                    # Single batch Overpass API call for all points
+                    pumps = fetch_pumps_overpass(sample_points, radius_m=3000)
+
                     # Deduplicate
                     seen = set()
                     unique = []
@@ -247,10 +268,11 @@ def calculate_route(req: RouteRequest):
                         if key not in seen:
                             seen.add(key)
                             unique.append(p)
-                    pumps = unique[:15]
+                    pumps = unique[:20]
                 except Exception as poi_err:
                     logging.warning(f"Overpass POI error: {poi_err}")
                     pumps = []
+
             
             return {
                 "source_coords": {"lat": lat1, "lon": lon1},
