@@ -24,57 +24,80 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": f"Server error: {str(exc)[:200]}"}
     )
 
-def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
+def fetch_pumps_along_route(path_coords: list, max_results=20) -> list:
     """
-    Fetch petrol pumps using Nominatim search API.
-    Same API as autocomplete - proven to work on Hugging Face, no rate limiting issues.
+    Fetch petrol pumps strictly along the route by sampling points from path_coords.
+    Uses a single Overpass API request to avoid rate limiting.
     """
-    HEADERS = {"User-Agent": "smartroute_ai_optimal_path_anu_unique_2026"}
+    if not path_coords or len(path_coords) == 0:
+        return []
+
+    # Sample ~6 points along the path for coverage
+    num_points = len(path_coords)
+    sample_indices = [0, num_points // 5, (num_points // 5) * 2, (num_points // 5) * 3, (num_points // 5) * 4, num_points - 1]
+    sample_points = [path_coords[i] for i in sample_indices if i < num_points]
+    
+    # Unique the sample points (in case of very short routes)
+    unique_samples = []
+    seen_pts = set()
+    for pt in sample_points:
+        key = (round(pt['lat'], 3), round(pt['lon'], 3))
+        if key not in seen_pts:
+            seen_pts.add(key)
+            unique_samples.append(pt)
+
+    # Build Overpass "around" query for each sampled point
+    # radius of 2500m ensures they are actually near the highway
+    around_queries = ""
+    for pt in unique_samples:
+        around_queries += f'node["amenity"="fuel"](around:2500,{pt["lat"]},{pt["lon"]});\n'
+        around_queries += f'way["amenity"="fuel"](around:2500,{pt["lat"]},{pt["lon"]});\n'
+
+    query = f"""
+    [out:json][timeout:25];
+    (
+      {around_queries}
+    );
+    out center {max_results};
+    """
+    
+    # Try multiple mirrors to be resilient
+    mirrors = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://lz4.overpass-api.de/api/interpreter"
+    ]
+    
     pumps = []
-
-    def nominatim_bbox_search(s_lat, s_lon, n_lat, n_lon, limit=10):
+    for mirror in mirrors:
         try:
-            url = "https://nominatim.openstreetmap.org/search"
-            params = {
-                "amenity": "fuel",
-                "format": "json",
-                "limit": limit,
-                "bounded": 1,
-                "viewbox": f"{s_lon},{n_lat},{n_lon},{s_lat}"
-            }
-            resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
+            resp = requests.post(mirror, data=query, timeout=20)
             resp.raise_for_status()
-            results = []
-            for item in resp.json():
-                name = item.get("display_name", "Petrol Pump").split(",")[0]
-                results.append({"lat": float(item["lat"]), "lon": float(item["lon"]), "name": name})
-            return results
+            data = resp.json()
+            elements = data.get("elements", [])
+            for el in elements:
+                name = el.get("tags", {}).get("name", "Petrol Pump")
+                if el["type"] == "node":
+                    pumps.append({"lat": el["lat"], "lon": el["lon"], "name": name})
+                elif "center" in el:
+                    pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": name})
+            
+            if pumps:
+                break # Success!
         except Exception as e:
-            logging.warning(f"Nominatim fuel search failed: {e}")
-            return []
-
-    min_lat = min(lat1, lat2)
-    max_lat = max(lat1, lat2)
-    min_lon = min(lon1, lon2)
-    max_lon = max(lon1, lon2)
-
-    # Always use ONE single Nominatim request to avoid rate limiting
-    pumps = nominatim_bbox_search(
-        min_lat - 0.15, min_lon - 0.15,
-        max_lat + 0.15, max_lon + 0.15,
-        limit=max_results
-    )
-
+            logging.warning(f"Overpass mirror {mirror} failed: {e}")
+            continue
 
     # Deduplicate
     seen = set()
     unique = []
     for p in pumps:
-        key = (round(p["lat"], 3), round(p["lon"], 3))
+        key = (round(p["lat"], 4), round(p["lon"], 4))
         if key not in seen:
             seen.add(key)
             unique.append(p)
-    logging.info(f"Nominatim found {len(unique)} fuel stations")
+    
+    logging.info(f"Overpass found {len(unique)} fuel stations along the route")
     return unique[:max_results]
 
 
@@ -264,11 +287,11 @@ def calculate_route(req: RouteRequest):
             time_minutes = round(base_time * traffic_multiplier, 2)
             dist_km = round(route_data["distance"] / 1000, 2)
 
-            # Fetch petrol pumps using a fast single bounding box Overpass query
+            # Fetch petrol pumps strictly along the sampled route path
             pumps = []
             if req.fetch_pois:
                 try:
-                    pumps = fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20)
+                    pumps = fetch_pumps_along_route(path_coords, max_results=20)
                 except Exception as poi_err:
                     logging.warning(f"POI fetch error: {poi_err}")
                     pumps = []
@@ -312,27 +335,27 @@ def calculate_route(req: RouteRequest):
         if not result:
             raise HTTPException(status_code=404, detail="No path found between the locations.")
             
-        # 6. Fetch POIs (Petrol Pumps)
+        # 5. Get POIs along the route
         pumps = []
+        path_coords = [{"lat": n['y'], "lon": n['x']} for n in result["path"]]
         if req.fetch_pois:
-            pumps = fetch_nearest_petrol_pumps(lat1, lon1, lat2, lon2)
-            
+            pumps = fetch_pumps_along_route(path_coords, max_results=15)
+
         return {
             "source_coords": {"lat": lat1, "lon": lon1},
             "dest_coords": {"lat": lat2, "lon": lon2},
-            "route": result["path"],
+            "route": path_coords,
             "metrics": {
                 "time_minutes": result["total_time_minutes"],
                 "distance_km": result["total_distance_km"],
-                "algorithm": result["algorithm"]
+                "algorithm": "A* Local Optimization"
             },
             "traffic": traffic_info,
             "pois": pumps
         }
-        
     except Exception as e:
-        logging.error(f"Error calculating route: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"Routing Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Local pathfinding failed: {e}")
 
 # Mount static files for the frontend UI
 frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "frontend")
