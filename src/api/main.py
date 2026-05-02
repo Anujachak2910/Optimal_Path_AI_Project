@@ -3,7 +3,6 @@ import os
 import requests
 from datetime import datetime
 import pytz
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -26,11 +25,14 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 def _overpass_point_query(lat, lon, radius_m, limit) -> list:
-    """Single fast Overpass point query (nodes only for speed)."""
+    """Single fast Overpass point query including both nodes and ways."""
     query = f"""
-    [out:json][timeout:10];
-    node["amenity"="fuel"](around:{radius_m},{lat},{lon});
-    out {limit};
+    [out:json][timeout:12];
+    (
+      node["amenity"="fuel"](around:{radius_m},{lat},{lon});
+      way["amenity"="fuel"](around:{radius_m},{lat},{lon});
+    );
+    out center {limit};
     """
     mirrors = [
         "https://overpass-api.de/api/interpreter",
@@ -38,10 +40,16 @@ def _overpass_point_query(lat, lon, radius_m, limit) -> list:
     ]
     for mirror in mirrors:
         try:
-            resp = requests.post(mirror, data=query, timeout=12)
+            resp = requests.post(mirror, data=query, timeout=14)
             resp.raise_for_status()
             elements = resp.json().get("elements", [])
-            return [{"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")} for el in elements if el["type"] == "node"]
+            pumps = []
+            for el in elements:
+                if el["type"] == "node":
+                    pumps.append({"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
+                elif "center" in el:
+                    pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
+            return pumps
         except Exception as e:
             logging.warning(f"Point query failed on {mirror}: {e}")
     return []
@@ -89,8 +97,7 @@ def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
             except Exception as e:
                 logging.warning(f"Bbox query failed: {e}")
     else:
-        # Large route (e.g. Mumbai-Delhi): 5 evenly spaced parallel point queries
-        # Interpolate 5 points from source to destination
+        # Large route: 5 evenly spaced sequential point queries covering full highway
         waypoints = [
             (
                 lat1 + (lat2 - lat1) * i / 4,
@@ -99,19 +106,10 @@ def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
             for i in range(5)  # 0%, 25%, 50%, 75%, 100%
         ]
         per_point = max(6, max_results // 5)
-
-        # Run all 5 queries in parallel - total time = ~5 seconds instead of 25
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [
-                executor.submit(_overpass_point_query, lat, lon, 8000, per_point)
-                for lat, lon in waypoints
-            ]
-            for future in as_completed(futures, timeout=20):
-                try:
-                    pumps += future.result()
-                except Exception as e:
-                    logging.warning(f"Parallel POI query failed: {e}")
-        logging.info(f"5-point parallel queries returned {len(pumps)} pumps total")
+        for (lat, lon) in waypoints:
+            result = _overpass_point_query(lat, lon, radius_m=10000, limit=per_point)
+            pumps.extend(result)
+            logging.info(f"Point ({round(lat,2)},{round(lon,2)}) → {len(result)} pumps")
 
     # Deduplicate
     seen = set()
