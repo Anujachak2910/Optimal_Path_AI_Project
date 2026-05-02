@@ -24,38 +24,32 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": f"Server error: {str(exc)[:200]}"}
     )
 
-def fetch_pumps_overpass(sample_points: list, radius_m: int = 3000) -> list:
+def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
     """
-    Fast petrol pump fetcher using a SINGLE Overpass API batch query.
-    Tries multiple Overpass mirrors in case one is blocked.
+    Fetch petrol pumps along a route using a single Overpass bounding box query.
+    Much faster than multi-point sampling.
     """
-    if not sample_points:
-        return []
+    # Build bounding box with padding
+    min_lat = min(lat1, lat2) - 0.1
+    max_lat = max(lat1, lat2) + 0.1
+    min_lon = min(lon1, lon2) - 0.1
+    max_lon = max(lon1, lon2) + 0.1
 
-    # Build one big query covering all sample points
-    node_parts = "\n".join(
-        [f'node["amenity"="fuel"](around:{radius_m},{pt["lat"]},{pt["lon"]});' for pt in sample_points]
-    )
-    way_parts = "\n".join(
-        [f'way["amenity"="fuel"](around:{radius_m},{pt["lat"]},{pt["lon"]});' for pt in sample_points]
-    )
     query = f"""
-    [out:json][timeout:15];
+    [out:json][timeout:20];
     (
-      {node_parts}
-      {way_parts}
+      node["amenity"="fuel"]({min_lat},{min_lon},{max_lat},{max_lon});
+      way["amenity"="fuel"]({min_lat},{min_lon},{max_lat},{max_lon});
     );
-    out center;
+    out center {max_results};
     """
-    # Try multiple mirrors in order
     mirrors = [
         "https://overpass-api.de/api/interpreter",
         "https://overpass.kumi.systems/api/interpreter",
-        "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
     ]
     for mirror in mirrors:
         try:
-            resp = requests.post(mirror, data=query, timeout=18)
+            resp = requests.post(mirror, data=query, timeout=22)
             resp.raise_for_status()
             elements = resp.json().get("elements", [])
             pumps = []
@@ -64,11 +58,12 @@ def fetch_pumps_overpass(sample_points: list, radius_m: int = 3000) -> list:
                     pumps.append({"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
                 elif "center" in el:
                     pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
-            logging.info(f"Overpass ({mirror}) returned {len(pumps)} pumps")
-            return pumps  # Return on first success
+            logging.info(f"Overpass bbox query returned {len(pumps)} pumps")
+            return pumps
         except Exception as e:
             logging.warning(f"Overpass mirror {mirror} failed: {e}")
     return []
+
 
 # Configure CORS for frontend
 app.add_middleware(
@@ -254,35 +249,15 @@ def calculate_route(req: RouteRequest):
             time_minutes = round(base_time * traffic_multiplier, 2)
             dist_km = round(route_data["distance"] / 1000, 2)
 
-            # Fetch petrol pumps along the ENTIRE route using batch Overpass query
+            # Fetch petrol pumps using a fast single bounding box Overpass query
             pumps = []
-            if req.fetch_pois and len(path_coords) > 0:
+            if req.fetch_pois:
                 try:
-                    # Sample 8 points evenly along the full route
-                    num_samples = min(8, len(path_coords))
-                    step = max(1, len(path_coords) // num_samples)
-                    sample_points = [path_coords[i] for i in range(0, len(path_coords), step)]
-                    # Always include source and destination
-                    if path_coords[0] not in sample_points:
-                        sample_points.insert(0, path_coords[0])
-                    if path_coords[-1] not in sample_points:
-                        sample_points.append(path_coords[-1])
-
-                    # Single batch Overpass API call for all points
-                    pumps = fetch_pumps_overpass(sample_points, radius_m=3000)
-
-                    # Deduplicate
-                    seen = set()
-                    unique = []
-                    for p in pumps:
-                        key = (round(p['lat'], 4), round(p['lon'], 4))
-                        if key not in seen:
-                            seen.add(key)
-                            unique.append(p)
-                    pumps = unique[:20]
+                    pumps = fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20)
                 except Exception as poi_err:
-                    logging.warning(f"Overpass POI error: {poi_err}")
+                    logging.warning(f"POI fetch error: {poi_err}")
                     pumps = []
+
 
             
             return {
