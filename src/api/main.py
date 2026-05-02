@@ -24,135 +24,63 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": f"Server error: {str(exc)[:200]}"}
     )
 
-def _overpass_point_query(lat, lon, radius_m, limit) -> list:
-    """Single fast Overpass point query including both nodes and ways."""
-    query = f"""
-    [out:json][timeout:12];
-    (
-      node["amenity"="fuel"](around:{radius_m},{lat},{lon});
-      way["amenity"="fuel"](around:{radius_m},{lat},{lon});
-    );
-    out center {limit};
-    """
-    mirrors = [
-        "https://overpass-api.de/api/interpreter",
-        "https://overpass.kumi.systems/api/interpreter",
-    ]
-    for mirror in mirrors:
-        try:
-            resp = requests.post(mirror, data=query, timeout=14)
-            resp.raise_for_status()
-            elements = resp.json().get("elements", [])
-            pumps = []
-            for el in elements:
-                if el["type"] == "node":
-                    pumps.append({"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
-                elif "center" in el:
-                    pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
-            return pumps
-        except Exception as e:
-            logging.warning(f"Point query failed on {mirror}: {e}")
-    return []
-
 def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
     """
-    Smart petrol pump fetcher.
-    - Short routes (<5 deg bbox): single fast bbox query
-    - Long routes (>=5 deg bbox): 3 targeted point queries at start/mid/end
+    Fetch petrol pumps using Nominatim search API.
+    Same API as autocomplete - proven to work on Hugging Face, no rate limiting issues.
     """
-    min_lat = min(lat1, lat2) - 0.1
-    max_lat = max(lat1, lat2) + 0.1
-    min_lon = min(lon1, lon2) - 0.1
-    max_lon = max(lon1, lon2) + 0.1
-    bbox_area = (max_lat - min_lat) * (max_lon - min_lon)
-
+    HEADERS = {"User-Agent": "smartroute_ai_optimal_path_anu_unique_2026"}
     pumps = []
 
-    if bbox_area <= 8:
-        # Small/medium route: one fast bbox query
-        query = f"""
-        [out:json][timeout:20];
-        (
-          node["amenity"="fuel"]({min_lat},{min_lon},{max_lat},{max_lon});
-          way["amenity"="fuel"]({min_lat},{min_lon},{max_lat},{max_lon});
-        );
-        out center {max_results};
-        """
-        mirrors = [
-            "https://overpass-api.de/api/interpreter",
-            "https://overpass.kumi.systems/api/interpreter",
-        ]
-        for mirror in mirrors:
-            try:
-                resp = requests.post(mirror, data=query, timeout=22)
-                resp.raise_for_status()
-                elements = resp.json().get("elements", [])
-                for el in elements:
-                    if el["type"] == "node":
-                        pumps.append({"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
-                    elif "center" in el:
-                        pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
-                logging.info(f"Bbox query returned {len(pumps)} pumps")
-                break
-            except Exception as e:
-                logging.warning(f"Bbox query failed: {e}")
+    def nominatim_bbox_search(s_lat, s_lon, n_lat, n_lon, limit=10):
+        try:
+            url = "https://nominatim.openstreetmap.org/search"
+            params = {
+                "amenity": "fuel",
+                "format": "json",
+                "limit": limit,
+                "bounded": 1,
+                "viewbox": f"{s_lon},{n_lat},{n_lon},{s_lat}"
+            }
+            resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
+            resp.raise_for_status()
+            results = []
+            for item in resp.json():
+                name = item.get("display_name", "Petrol Pump").split(",")[0]
+                results.append({"lat": float(item["lat"]), "lon": float(item["lon"]), "name": name})
+            return results
+        except Exception as e:
+            logging.warning(f"Nominatim fuel search failed: {e}")
+            return []
+
+    min_lat = min(lat1, lat2)
+    max_lat = max(lat1, lat2)
+    min_lon = min(lon1, lon2)
+    max_lon = max(lon1, lon2)
+
+    if (max_lat - min_lat) <= 4 and (max_lon - min_lon) <= 4:
+        # Short/medium route: single bbox search
+        pumps = nominatim_bbox_search(min_lat - 0.1, min_lon - 0.1, max_lat + 0.1, max_lon + 0.1, limit=max_results)
     else:
-        # Large route: ONE Overpass query with all 5 waypoints merged in a union
-        # This avoids rate limiting (429) from multiple requests
-        waypoints = [
-            (
-                lat1 + (lat2 - lat1) * i / 4,
-                lon1 + (lon2 - lon1) * i / 4
-            )
-            for i in range(5)  # 0%, 25%, 50%, 75%, 100%
-        ]
-        radius_m = 10000
-        per_point = max(5, max_results // 5)
-
-        # Build one big union query covering all waypoints
-        node_parts = "\n".join(
-            [f'node["amenity"="fuel"](around:{radius_m},{lat},{lon});' for lat, lon in waypoints]
-        )
-        way_parts = "\n".join(
-            [f'way["amenity"="fuel"](around:{radius_m},{lat},{lon});' for lat, lon in waypoints]
-        )
-        query = f"""
-        [out:json][timeout:30];
-        (
-          {node_parts}
-          {way_parts}
-        );
-        out center {max_results};
-        """
-        mirrors = [
-            "https://overpass-api.de/api/interpreter",
-            "https://overpass.kumi.systems/api/interpreter",
-        ]
-        for mirror in mirrors:
-            try:
-                resp = requests.post(mirror, data=query, timeout=35)
-                resp.raise_for_status()
-                elements = resp.json().get("elements", [])
-                for el in elements:
-                    if el["type"] == "node":
-                        pumps.append({"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
-                    elif "center" in el:
-                        pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
-                logging.info(f"Union query returned {len(pumps)} pumps for long route")
-                break
-            except Exception as e:
-                logging.warning(f"Union query failed on {mirror}: {e}")
-
+        # Long route: search near source, midpoint, destination
+        mid_lat = (lat1 + lat2) / 2
+        mid_lon = (lon1 + lon2) / 2
+        per = max(4, max_results // 3)
+        for (clat, clon) in [(lat1, lon1), (mid_lat, mid_lon), (lat2, lon2)]:
+            pumps += nominatim_bbox_search(clat - 0.3, clon - 0.3, clat + 0.3, clon + 0.3, limit=per)
 
     # Deduplicate
     seen = set()
     unique = []
     for p in pumps:
-        key = (round(p["lat"], 4), round(p["lon"], 4))
+        key = (round(p["lat"], 3), round(p["lon"], 3))
         if key not in seen:
             seen.add(key)
             unique.append(p)
+    logging.info(f"Nominatim found {len(unique)} fuel stations")
     return unique[:max_results]
+
+
 
 
 # Configure CORS for frontend
