@@ -2,7 +2,7 @@ import os
 import osmnx as ox
 import networkx as nx
 from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut
+from geopy.exc import GeocoderTimedOut, GeocoderServiceError, GeocoderUnavailable, GeocoderQuotaExceeded
 import logging
 import threading
 
@@ -21,13 +21,13 @@ download_lock = threading.Lock()
 def geocode_address(address: str):
     """Convert an address string into (lat, lon) coordinates."""
     try:
-        # Increased timeout to 10 seconds for better resilience on shared hosting
         location = geolocator.geocode(address, timeout=10)
         if location:
             return location.latitude, location.longitude
         return None
-    except GeocoderTimedOut:
-        logger.error("Geocoding timed out.")
+    except Exception as e:
+        # Catch ALL geopy errors including 429 rate limits, service errors, timeouts
+        logger.error(f"Geocoding failed for '{address}': {e}")
         return None
 
 def get_bounding_box(lat1, lon1, lat2, lon2, padding=0.015):

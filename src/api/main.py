@@ -58,16 +58,13 @@ def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
     min_lon = min(lon1, lon2)
     max_lon = max(lon1, lon2)
 
-    if (max_lat - min_lat) <= 4 and (max_lon - min_lon) <= 4:
-        # Short/medium route: single bbox search
-        pumps = nominatim_bbox_search(min_lat - 0.1, min_lon - 0.1, max_lat + 0.1, max_lon + 0.1, limit=max_results)
-    else:
-        # Long route: search near source, midpoint, destination
-        mid_lat = (lat1 + lat2) / 2
-        mid_lon = (lon1 + lon2) / 2
-        per = max(4, max_results // 3)
-        for (clat, clon) in [(lat1, lon1), (mid_lat, mid_lon), (lat2, lon2)]:
-            pumps += nominatim_bbox_search(clat - 0.3, clon - 0.3, clat + 0.3, clon + 0.3, limit=per)
+    # Always use ONE single Nominatim request to avoid rate limiting
+    pumps = nominatim_bbox_search(
+        min_lat - 0.15, min_lon - 0.15,
+        max_lat + 0.15, max_lon + 0.15,
+        limit=max_results
+    )
+
 
     # Deduplicate
     seen = set()
