@@ -27,7 +27,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 def fetch_pumps_overpass(sample_points: list, radius_m: int = 3000) -> list:
     """
     Fast petrol pump fetcher using a SINGLE Overpass API batch query.
-    Queries a radius around multiple points in one HTTP call.
+    Tries multiple Overpass mirrors in case one is blocked.
     """
     if not sample_points:
         return []
@@ -47,24 +47,28 @@ def fetch_pumps_overpass(sample_points: list, radius_m: int = 3000) -> list:
     );
     out center;
     """
-    try:
-        resp = requests.post(
-            "https://overpass-api.de/api/interpreter",
-            data=query,
-            timeout=18
-        )
-        resp.raise_for_status()
-        elements = resp.json().get("elements", [])
-        pumps = []
-        for el in elements:
-            if el["type"] == "node":
-                pumps.append({"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
-            elif "center" in el:
-                pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
-        return pumps
-    except Exception as e:
-        logging.warning(f"Overpass API error: {e}")
-        return []
+    # Try multiple mirrors in order
+    mirrors = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+    ]
+    for mirror in mirrors:
+        try:
+            resp = requests.post(mirror, data=query, timeout=18)
+            resp.raise_for_status()
+            elements = resp.json().get("elements", [])
+            pumps = []
+            for el in elements:
+                if el["type"] == "node":
+                    pumps.append({"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
+                elif "center" in el:
+                    pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
+            logging.info(f"Overpass ({mirror}) returned {len(pumps)} pumps")
+            return pumps  # Return on first success
+        except Exception as e:
+            logging.warning(f"Overpass mirror {mirror} failed: {e}")
+    return []
 
 # Configure CORS for frontend
 app.add_middleware(
@@ -74,6 +78,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/debug-pumps")
+def debug_pumps():
+    """Test endpoint to verify Overpass API works from this server."""
+    test_points = [{"lat": 24.8171, "lon": 92.7789}]  # Silchar
+    pumps = fetch_pumps_overpass(test_points, radius_m=5000)
+    return {"status": "ok", "count": len(pumps), "sample": pumps[:2]}
 
 # Major metro cities that always have higher baseline traffic
 MAJOR_METROS = [
