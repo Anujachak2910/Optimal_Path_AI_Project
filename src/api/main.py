@@ -3,6 +3,7 @@ import os
 import requests
 from datetime import datetime
 import pytz
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -88,13 +89,29 @@ def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
             except Exception as e:
                 logging.warning(f"Bbox query failed: {e}")
     else:
-        # Large route (e.g. Mumbai-Delhi): 3 targeted point queries
-        mid_lat = (lat1 + lat2) / 2
-        mid_lon = (lon1 + lon2) / 2
-        per_point = max_results // 3
-        for (lat, lon) in [(lat1, lon1), (mid_lat, mid_lon), (lat2, lon2)]:
-            pumps += _overpass_point_query(lat, lon, radius_m=8000, limit=per_point)
-        logging.info(f"3-point queries returned {len(pumps)} pumps total")
+        # Large route (e.g. Mumbai-Delhi): 5 evenly spaced parallel point queries
+        # Interpolate 5 points from source to destination
+        waypoints = [
+            (
+                lat1 + (lat2 - lat1) * i / 4,
+                lon1 + (lon2 - lon1) * i / 4
+            )
+            for i in range(5)  # 0%, 25%, 50%, 75%, 100%
+        ]
+        per_point = max(6, max_results // 5)
+
+        # Run all 5 queries in parallel - total time = ~5 seconds instead of 25
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [
+                executor.submit(_overpass_point_query, lat, lon, 8000, per_point)
+                for lat, lon in waypoints
+            ]
+            for future in as_completed(futures, timeout=20):
+                try:
+                    pumps += future.result()
+                except Exception as e:
+                    logging.warning(f"Parallel POI query failed: {e}")
+        logging.info(f"5-point parallel queries returned {len(pumps)} pumps total")
 
     # Deduplicate
     seen = set()
