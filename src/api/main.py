@@ -24,24 +24,12 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": f"Server error: {str(exc)[:200]}"}
     )
 
-def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
-    """
-    Fetch petrol pumps along a route using a single Overpass bounding box query.
-    Much faster than multi-point sampling.
-    """
-    # Build bounding box with padding
-    min_lat = min(lat1, lat2) - 0.1
-    max_lat = max(lat1, lat2) + 0.1
-    min_lon = min(lon1, lon2) - 0.1
-    max_lon = max(lon1, lon2) + 0.1
-
+def _overpass_point_query(lat, lon, radius_m, limit) -> list:
+    """Single fast Overpass point query (nodes only for speed)."""
     query = f"""
-    [out:json][timeout:20];
-    (
-      node["amenity"="fuel"]({min_lat},{min_lon},{max_lat},{max_lon});
-      way["amenity"="fuel"]({min_lat},{min_lon},{max_lat},{max_lon});
-    );
-    out center {max_results};
+    [out:json][timeout:10];
+    node["amenity"="fuel"](around:{radius_m},{lat},{lon});
+    out {limit};
     """
     mirrors = [
         "https://overpass-api.de/api/interpreter",
@@ -49,20 +37,74 @@ def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
     ]
     for mirror in mirrors:
         try:
-            resp = requests.post(mirror, data=query, timeout=22)
+            resp = requests.post(mirror, data=query, timeout=12)
             resp.raise_for_status()
             elements = resp.json().get("elements", [])
-            pumps = []
-            for el in elements:
-                if el["type"] == "node":
-                    pumps.append({"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
-                elif "center" in el:
-                    pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
-            logging.info(f"Overpass bbox query returned {len(pumps)} pumps")
-            return pumps
+            return [{"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")} for el in elements if el["type"] == "node"]
         except Exception as e:
-            logging.warning(f"Overpass mirror {mirror} failed: {e}")
+            logging.warning(f"Point query failed on {mirror}: {e}")
     return []
+
+def fetch_pumps_along_route(lat1, lon1, lat2, lon2, max_results=20) -> list:
+    """
+    Smart petrol pump fetcher.
+    - Short routes (<5 deg bbox): single fast bbox query
+    - Long routes (>=5 deg bbox): 3 targeted point queries at start/mid/end
+    """
+    min_lat = min(lat1, lat2) - 0.1
+    max_lat = max(lat1, lat2) + 0.1
+    min_lon = min(lon1, lon2) - 0.1
+    max_lon = max(lon1, lon2) + 0.1
+    bbox_area = (max_lat - min_lat) * (max_lon - min_lon)
+
+    pumps = []
+
+    if bbox_area <= 8:
+        # Small/medium route: one fast bbox query
+        query = f"""
+        [out:json][timeout:20];
+        (
+          node["amenity"="fuel"]({min_lat},{min_lon},{max_lat},{max_lon});
+          way["amenity"="fuel"]({min_lat},{min_lon},{max_lat},{max_lon});
+        );
+        out center {max_results};
+        """
+        mirrors = [
+            "https://overpass-api.de/api/interpreter",
+            "https://overpass.kumi.systems/api/interpreter",
+        ]
+        for mirror in mirrors:
+            try:
+                resp = requests.post(mirror, data=query, timeout=22)
+                resp.raise_for_status()
+                elements = resp.json().get("elements", [])
+                for el in elements:
+                    if el["type"] == "node":
+                        pumps.append({"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
+                    elif "center" in el:
+                        pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
+                logging.info(f"Bbox query returned {len(pumps)} pumps")
+                break
+            except Exception as e:
+                logging.warning(f"Bbox query failed: {e}")
+    else:
+        # Large route (e.g. Mumbai-Delhi): 3 targeted point queries
+        mid_lat = (lat1 + lat2) / 2
+        mid_lon = (lon1 + lon2) / 2
+        per_point = max_results // 3
+        for (lat, lon) in [(lat1, lon1), (mid_lat, mid_lon), (lat2, lon2)]:
+            pumps += _overpass_point_query(lat, lon, radius_m=8000, limit=per_point)
+        logging.info(f"3-point queries returned {len(pumps)} pumps total")
+
+    # Deduplicate
+    seen = set()
+    unique = []
+    for p in pumps:
+        key = (round(p["lat"], 4), round(p["lon"], 4))
+        if key not in seen:
+            seen.add(key)
+            unique.append(p)
+    return unique[:max_results]
 
 
 # Configure CORS for frontend
