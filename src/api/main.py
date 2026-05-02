@@ -16,7 +16,6 @@ from src.algorithms.pathfinder import find_optimal_path, haversine
 app = FastAPI(title="SmartRoute AI API")
 
 # Global exception handler - ALWAYS returns JSON, never HTML
-# This prevents the "Unexpected token" error on the frontend
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logging.error(f"Unhandled exception: {exc}")
@@ -24,6 +23,38 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"detail": f"Server error: {str(exc)[:200]}"}
     )
+
+def fetch_pumps_overpass(lat: float, lon: float, radius_m: int = 5000) -> list:
+    """
+    Fast petrol pump fetcher using Overpass API.
+    Queries a radius around a single point — much faster than OSMnx bbox.
+    """
+    query = f"""
+    [out:json][timeout:8];
+    (
+      node["amenity"="fuel"](around:{radius_m},{lat},{lon});
+      way["amenity"="fuel"](around:{radius_m},{lat},{lon});
+    );
+    out center;
+    """
+    try:
+        resp = requests.post(
+            "https://overpass-api.de/api/interpreter",
+            data=query,
+            timeout=10
+        )
+        resp.raise_for_status()
+        elements = resp.json().get("elements", [])
+        pumps = []
+        for el in elements:
+            if el["type"] == "node":
+                pumps.append({"lat": el["lat"], "lon": el["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
+            elif "center" in el:
+                pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": el.get("tags", {}).get("name", "Petrol Pump")})
+        return pumps
+    except Exception as e:
+        logging.warning(f"Overpass API error: {e}")
+        return []
 
 # Configure CORS for frontend
 app.add_middleware(
@@ -202,8 +233,24 @@ def calculate_route(req: RouteRequest):
             time_minutes = round(base_time * traffic_multiplier, 2)
             dist_km = round(route_data["distance"] / 1000, 2)
 
-            # Skip POI fetching for long routes - too slow on cloud hosting
+            # Fetch petrol pumps via fast Overpass API (near source + destination)
             pumps = []
+            if req.fetch_pois:
+                try:
+                    pumps = fetch_pumps_overpass(lat1, lon1, radius_m=5000)
+                    pumps += fetch_pumps_overpass(lat2, lon2, radius_m=5000)
+                    # Deduplicate
+                    seen = set()
+                    unique = []
+                    for p in pumps:
+                        key = (round(p['lat'], 4), round(p['lon'], 4))
+                        if key not in seen:
+                            seen.add(key)
+                            unique.append(p)
+                    pumps = unique[:15]
+                except Exception as poi_err:
+                    logging.warning(f"Overpass POI error: {poi_err}")
+                    pumps = []
             
             return {
                 "source_coords": {"lat": lat1, "lon": lon1},
