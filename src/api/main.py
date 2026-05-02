@@ -24,80 +24,73 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": f"Server error: {str(exc)[:200]}"}
     )
 
+import time
+
 def fetch_pumps_along_route(path_coords: list, max_results=20) -> list:
     """
-    Fetch petrol pumps strictly along the route by sampling points from path_coords.
-    Uses a single Overpass API request to avoid rate limiting.
+    Fetch petrol pumps strictly along the route using targeted Nominatim searches.
+    Searches 4 specific points along the path with delays to avoid 429 rate limits.
     """
     if not path_coords or len(path_coords) == 0:
         return []
 
-    # Sample ~6 points along the path for coverage
+    # Sample 4 points along the path (Start, 33%, 66%, End)
     num_points = len(path_coords)
-    sample_indices = [0, num_points // 5, (num_points // 5) * 2, (num_points // 5) * 3, (num_points // 5) * 4, num_points - 1]
-    sample_points = [path_coords[i] for i in sample_indices if i < num_points]
-    
-    # Unique the sample points (in case of very short routes)
-    unique_samples = []
-    seen_pts = set()
-    for pt in sample_points:
-        key = (round(pt['lat'], 3), round(pt['lon'], 3))
-        if key not in seen_pts:
-            seen_pts.add(key)
-            unique_samples.append(pt)
+    indices = [0, num_points // 3, (num_points // 3) * 2, num_points - 1]
+    sample_pts = []
+    seen_coords = set()
+    for i in indices:
+        if i < num_points:
+            pt = path_coords[i]
+            coord = (round(pt['lat'], 3), round(pt['lon'], 3))
+            if coord not in seen_coords:
+                seen_coords.add(coord)
+                sample_pts.append(pt)
 
-    # Build Overpass "around" query for each sampled point
-    # radius of 2500m ensures they are actually near the highway
-    around_queries = ""
-    for pt in unique_samples:
-        around_queries += f'node["amenity"="fuel"](around:2500,{pt["lat"]},{pt["lon"]});\n'
-        around_queries += f'way["amenity"="fuel"](around:2500,{pt["lat"]},{pt["lon"]});\n'
+    HEADERS = {"User-Agent": "smartroute_ai_optimal_path_anu_unique_2026"}
+    all_pumps = []
 
-    query = f"""
-    [out:json][timeout:25];
-    (
-      {around_queries}
-    );
-    out center {max_results};
-    """
-    
-    # Try multiple mirrors to be resilient
-    mirrors = [
-        "https://overpass-api.de/api/interpreter",
-        "https://overpass.kumi.systems/api/interpreter",
-        "https://lz4.overpass-api.de/api/interpreter"
-    ]
-    
-    pumps = []
-    for mirror in mirrors:
-        try:
-            resp = requests.post(mirror, data=query, timeout=20)
-            resp.raise_for_status()
-            data = resp.json()
-            elements = data.get("elements", [])
-            for el in elements:
-                name = el.get("tags", {}).get("name", "Petrol Pump")
-                if el["type"] == "node":
-                    pumps.append({"lat": el["lat"], "lon": el["lon"], "name": name})
-                elif "center" in el:
-                    pumps.append({"lat": el["center"]["lat"], "lon": el["center"]["lon"], "name": name})
+    for idx, pt in enumerate(sample_pts):
+        # 1-second delay between requests to avoid Nominatim 429 Rate Limit
+        if idx > 0:
+            time.sleep(1.1)
             
-            if pumps:
-                break # Success!
+        try:
+            # Search in a small 10km box around the point
+            lat, lon = pt['lat'], pt['lon']
+            viewbox = f"{lon-0.08},{lat+0.08},{lon+0.08},{lat-0.08}"
+            
+            url = "https://nominatim.openstreetmap.org/search"
+            params = {
+                "amenity": "fuel",
+                "format": "json",
+                "limit": 5,
+                "bounded": 1,
+                "viewbox": viewbox
+            }
+            
+            resp = requests.get(url, params=params, headers=HEADERS, timeout=8)
+            if resp.status_code == 200:
+                for item in resp.json():
+                    name = item.get("display_name", "Petrol Pump").split(",")[0]
+                    all_pumps.append({
+                        "lat": float(item["lat"]),
+                        "lon": float(item["lon"]),
+                        "name": name
+                    })
         except Exception as e:
-            logging.warning(f"Overpass mirror {mirror} failed: {e}")
-            continue
+            logging.warning(f"Nominatim point search failed at {pt}: {e}")
 
-    # Deduplicate
+    # Deduplicate by location
     seen = set()
     unique = []
-    for p in pumps:
+    for p in all_pumps:
         key = (round(p["lat"], 4), round(p["lon"], 4))
         if key not in seen:
             seen.add(key)
             unique.append(p)
     
-    logging.info(f"Overpass found {len(unique)} fuel stations along the route")
+    logging.info(f"Nominatim found {len(unique)} fuel stations strictly along the route")
     return unique[:max_results]
 
 
