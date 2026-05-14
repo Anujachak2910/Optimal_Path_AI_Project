@@ -9,13 +9,13 @@ pinned: false
 
 # SmartRoute AI (Optimal Path Finder)
 
-[![Hugging Face Space](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Space-blue)](https://huggingface.co/spaces/AnuC2910/smartroute-maps)
+[![Hugging Face Space](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Space-blue)](https://anuc2910-smartroute-maps.hf.space/)
 
 SmartRoute AI is an intelligent, production-grade geographic routing application. It dynamically calculates the absolute mathematically optimal path between any two locations across the globe, minimizing travel time while accounting for real-world AI-detected traffic conditions.
 
 ## 🌐 Live Demo
 You can try the application live here:  
-👉 **[https://huggingface.co/spaces/AnuC2910/smartroute-maps](https://huggingface.co/spaces/AnuC2910/smartroute-maps)**
+👉 **[https://anuc2910-smartroute-maps.hf.space](https://anuc2910-smartroute-maps.hf.space/)**
 
 ## 🌟 Key Features
 
